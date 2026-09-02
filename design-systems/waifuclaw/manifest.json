@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "od-design-system-project/v1",
+  "id": "waifuclaw",
+  "name": "WaifuClaw",
+  "category": "Companion & Agent Workbench",
+  "description": "Anime-goth companion workbench: black paper, neon magenta glow-as-depth, gothic wordmarks, mono data density, and Kline as a living presence. Cute-but-dark, glossy, animation-rich.",
+  "source": {
+    "type": "local",
+    "origin": "WaifuClaw rebuild 2026-09, values carried from Willie-approved 2026-07 build"
+  },
+  "files": {
+    "design": "DESIGN.md",
+    "tokens": "tokens.css"
+  }
+}

@@ -1,0 +1,46 @@
+/* WaifuClaw design tokens — canonical compiled custom properties.
+   Values carried from Willie-approved 2026-07 build (archived slice 1-3).
+   Contract: DESIGN.md in this folder. Glow is the depth model. */
+
+:root {
+  /* Paper — true black/near-black, never grey-card */
+  --wc-void-ink: #08050d;
+  --wc-moth-paper: #120b1e;
+  --wc-wing-glass: #241231;
+
+  /* Accent — neon magenta primary, violet secondary, pink-white highlight */
+  --wc-kline-magenta: #f72a9b;
+  --wc-violet: #a855f7;
+  --wc-highlight: #ffd6f5;
+  --wc-moon-blush: #ffe8f7;
+  --wc-signal-cyan: #6bcbff;
+
+  /* Status */
+  --wc-danger: #ff647c;
+  --wc-success: #4ee6a8;
+  --wc-warning: #ffbe63;
+
+  /* Image overlays */
+  --wc-image-scrim: rgb(8 5 13 / 72%);
+  --wc-on-image: #ffe8f7;
+  --wc-on-image-muted: #d9bfd2;
+
+  /* Glow — the depth model (1px neon border + outer glow; no drop shadows) */
+  --wc-glow-magenta: 0 0 24px rgb(247 42 155 / 45%);
+  --wc-glow-magenta-soft: 0 0 12px rgb(247 42 155 / 30%);
+  --wc-glow-cyan: 0 0 20px rgb(107 203 255 / 40%);
+  --wc-border-neon: 1px solid color-mix(in oklab, var(--wc-kline-magenta) 55%, transparent);
+  --wc-border-neon-dim: 1px solid color-mix(in oklab, var(--wc-violet) 35%, transparent);
+
+  /* Type — gothic for wordmarks ONLY; grotesk body; mono for all stats/logs;
+     Dela/Bangers reserved for manga SFX */
+  --font-gothic: "Metal Mania", "UnifrakturCook", serif;
+  --font-display: "Unbounded Variable", "Unbounded", sans-serif;
+  --font-sans: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", monospace;
+  --font-sfx: "Dela Gothic One", "Bangers", cursive;
+
+  /* Motion — she breathes, nothing bounces */
+  --wc-motion-breathe: 6s ease-in-out infinite;
+  --wc-motion-entrance: 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
