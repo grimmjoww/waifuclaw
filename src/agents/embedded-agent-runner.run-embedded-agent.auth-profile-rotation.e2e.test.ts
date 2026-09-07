@@ -12,7 +12,7 @@ import {
   resolveInlineProviderApiKeyUsageId,
   type AuthProfileFailureReason,
 } from "./auth-profiles.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { AgentHarness } from "./harness/types.js";
 import {
@@ -351,6 +351,8 @@ const makeErrorAttempt = (
     ...overrides,
   });
   return makeAttempt({
+    // Rotation-only fixtures disable retries; retry-budget cases override this.
+    providerRetryMaxRetries: 0,
     assistantTexts: [],
     lastAssistant: assistant,
     ...(opts?.currentAttempt ? { currentAttemptAssistant: assistant } : {}),
@@ -456,8 +458,7 @@ async function runAutoPinnedRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
-    // This provider reports a three-retry cap; exhaust it before rotating.
-    // Credential/quota failures still rotate after the first failed attempt.
+    // Exhaust this provider's three-retry cap before rotating on transient failures.
     const failureCount = params.exhaustTransientRetries ? 4 : 1;
     for (let attempt = 0; attempt < failureCount; attempt += 1) {
       runEmbeddedAttemptMock.mockResolvedValueOnce({
@@ -920,8 +921,9 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     }
   });
 
-  it("rotates auto-pinned profiles on long-window rate limits without transient retries", async () => {
+  it("rotates auto-pinned profiles on long-window rate limits after transient retries", async () => {
     await runAutoPinnedRotationCase({
+      exhaustTransientRetries: true,
       errorMessage: "429 Too Many Requests: subscription usage limit reached",
       sessionKey: "agent:test:auto",
       runId: "run:auto",
