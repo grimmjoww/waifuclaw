@@ -421,6 +421,7 @@ async function expectRetriedDeviceTokenConnect(params: {
   });
   const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
   expect(firstConnect.params?.auth?.token).toBe(params.token);
+  expect(firstConnect.params?.auth?.password).toBe(params.token);
   expect(firstConnect.params?.auth?.deviceToken).toBeUndefined();
 
   emitRetryableTokenMismatch(firstWs, firstConnect.id);
@@ -435,6 +436,7 @@ async function expectRetriedDeviceTokenConnect(params: {
     params.retryNonce ?? "nonce-2",
   );
   expect(secondConnect.params?.auth?.token).toBe(params.token);
+  expect(secondConnect.params?.auth?.password).toBe(params.token);
   expect(secondConnect.params?.auth?.deviceToken).toBe(STORED_CRED);
 
   return { client, firstWs, secondWs, firstConnect, secondConnect };
@@ -551,6 +553,7 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
       GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
+      GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
@@ -697,15 +700,17 @@ describe("GatewayBrowserClient", () => {
     client.stop();
   });
 
-  it("requests handoff scopes with bootstrap token auth", async () => {
+  it("prefers bootstrap auth over a shared secret and requests handoff scopes", async () => {
     const client = new GatewayBrowserClient({
       url: "wss://gateway.example",
+      token: "gateway-secret",
       bootstrapToken: "boot-1",
     });
 
     const { connectFrame } = await startConnect(client);
 
     expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.password).toBeUndefined();
     expect(connectFrame.params?.auth?.bootstrapToken).toBe("boot-1");
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]);
     const [, signedPayload] = requireFirstSignCall();
@@ -1183,7 +1188,7 @@ describe("GatewayBrowserClient", () => {
       hasDevice: true,
       hasAuthToken: true,
       hasDeviceToken: false,
-      hasPassword: false,
+      hasPassword: true,
     });
   });
 
@@ -1386,7 +1391,9 @@ describe("GatewayBrowserClient", () => {
     expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
     expect(onRecoveryScopeChange).not.toHaveBeenCalled();
 
+    const firstGeneration = client.connectionGeneration;
     firstWs.emitClose(1006, "socket lost");
+    expect(client.connectionGeneration).toBeGreaterThan(firstGeneration);
     await vi.advanceTimersByTimeAsync(800);
     const secondWs = getLatestWebSocket();
     secondWs.emitOpen();
@@ -1444,7 +1451,9 @@ describe("GatewayBrowserClient", () => {
     expect(
       readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
     ).toEqual({ ...recovery, recoveryScope: "server-current" });
+    const connectedGeneration = client.connectionGeneration;
     client.stop();
+    expect(client.connectionGeneration).toBeGreaterThan(connectedGeneration);
     expect(client.recoveryScopeReady).toBe(false);
   });
 
@@ -1746,7 +1755,7 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
-  it("prefers explicit shared auth over cached device tokens", async () => {
+  it("sends the Gateway secret in both fields ahead of cached device tokens", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -1757,6 +1766,8 @@ describe("GatewayBrowserClient", () => {
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
+    expect(connectFrame.params?.auth?.password).toBe("shared-auth-token");
+    expect(connectFrame.params?.auth?.deviceToken).toBeUndefined();
     const [privateKey, signedPayload] = requireFirstSignCall();
     expect(privateKey).toBe("private-key");
     expectSignedPayloadFields(signedPayload, {
@@ -1779,32 +1790,36 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: "shared-auth-token",
-      password: undefined,
+      password: "shared-auth-token",
       deviceToken: undefined,
     });
     expect(connectFrame.params?.device?.id).toBe("device-1");
     expect(signDevicePayloadMock).toHaveBeenCalled();
   });
 
-  it("attaches device identity alongside an explicit shared password on an insecure context", async () => {
-    stubInsecureCrypto();
-    const client = new GatewayBrowserClient({
-      url: "ws://gateway.example:18789",
-      password: "shared-password", // pragma: allowlist secret
-    });
+  it.each([undefined, "native-token"])(
+    "preserves an explicit native password with token %s on an insecure context",
+    async (token) => {
+      stubInsecureCrypto();
+      const client = new GatewayBrowserClient({
+        url: "ws://gateway.example:18789",
+        token,
+        password: "shared-password", // pragma: allowlist secret
+      });
 
-    const { connectFrame } = await startConnect(client);
+      const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("1:req-insecure");
-    expect(connectFrame.method).toBe("connect");
-    expect(connectFrame.params?.auth).toEqual({
-      token: undefined,
-      password: "shared-password", // pragma: allowlist secret
-      deviceToken: undefined,
-    });
-    expect(connectFrame.params?.device?.id).toBe("device-1");
-    expect(signDevicePayloadMock).toHaveBeenCalled();
-  });
+      expect(connectFrame.id).toBe("1:req-insecure");
+      expect(connectFrame.method).toBe("connect");
+      expect(connectFrame.params?.auth).toEqual({
+        token,
+        password: "shared-password", // pragma: allowlist secret
+        deviceToken: undefined,
+      });
+      expect(connectFrame.params?.device?.id).toBe("device-1");
+      expect(signDevicePayloadMock).toHaveBeenCalled();
+    },
+  );
 
   it("uses cached device tokens only when no explicit shared auth is provided", async () => {
     const client = new GatewayBrowserClient({
@@ -1816,6 +1831,7 @@ describe("GatewayBrowserClient", () => {
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.password).toBeUndefined();
     expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
     const [privateKey, signedPayload] = requireFirstSignCall();
     expect(privateKey).toBe("private-key");
