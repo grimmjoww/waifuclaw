@@ -370,7 +370,9 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       inspection.legacyBackupRootCount > inspection.preservedLegacyBackupRootCount
     ) {
       fixHints.push(
-        "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
+        ctx.mode === "doctor"
+          ? "Review the remaining targets and migration warnings above. Resolve their ownership or recovery blockers before retrying Doctor; repeating the same repair alone will not resolve them."
+          : "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
       );
     }
     if (inspection.preservedLegacyBackupRootCount > 0) {
@@ -388,7 +390,7 @@ const skillWorkshopRelocationCheck: HealthCheck = {
           .map(([agentId, count]) => `${agentId}: ${count}`)
           .join(
             ", ",
-          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).`,
+          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).${inspection.externalProposalDetails?.length ? `\nRemaining proposal targets (showing ${inspection.externalProposalDetails.length} of ${inspection.externalProposalCount}):\n${inspection.externalProposalDetails.join("\n")}` : ""}`,
         path: "skills.workshop",
         fixHint: fixHints.join(" "),
       },
@@ -512,7 +514,7 @@ const hooksModelCheck: HealthCheck = {
       return [];
     }
     const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-    const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+    const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
     const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
       await import("../agents/model-selection.js");
     const hooksModelRef = resolveHooksGmailModel({
@@ -534,7 +536,7 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadPreparedModelCatalog({
+    const catalog = await readPreparedModelCatalog({
       config: ctx.cfg,
       readOnly: true,
       providerDiscoveryProviderIds: [],
