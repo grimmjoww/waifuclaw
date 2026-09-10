@@ -1,6 +1,7 @@
 // Provides SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isMainThread, threadId } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -68,12 +69,32 @@ export async function withSqliteWriteAdmissionService<T>(
   }
 }
 
-function beginImmediateTransaction(db: DatabaseSync): void {
+type SqliteBeginAdmissionDiagnostics = {
+  nativeAttempts: number;
+  nativeMs: number;
+  serviceCalls: number;
+  serviceMs: number;
+};
+
+function execNativeBegin(db: DatabaseSync, diagnostics: SqliteBeginAdmissionDiagnostics): void {
+  const startedAt = Date.now();
+  diagnostics.nativeAttempts += 1;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+  } finally {
+    diagnostics.nativeMs += Date.now() - startedAt;
+  }
+}
+
+function beginImmediateTransaction(
+  db: DatabaseSync,
+  diagnostics: SqliteBeginAdmissionDiagnostics,
+): void {
   // Native location identifies reopened handles without probing the filesystem.
   const location = writeAdmissionServices.size > 0 ? db.location() : null;
   const services = location === null ? undefined : writeAdmissionServices.get(location);
   if (!services) {
-    db.exec("BEGIN IMMEDIATE");
+    execNativeBegin(db, diagnostics);
     return;
   }
   const deadline = performance.now() + readSqliteBusyTimeout(db);
@@ -82,7 +103,7 @@ function beginImmediateTransaction(db: DatabaseSync): void {
       runWithSqliteBusyTimeout(
         db,
         Math.min(25, Math.max(0, Math.ceil(deadline - performance.now()))),
-        () => db.exec("BEGIN IMMEDIATE"),
+        () => execNativeBegin(db, diagnostics),
       );
       return;
     } catch (error) {
@@ -92,7 +113,13 @@ function beginImmediateTransaction(db: DatabaseSync): void {
       // Only admission repeats. Services retain their own authority and settlement
       // rules; caller mutations and postcommit publication have not started yet.
       for (const service of services) {
-        service();
+        const startedAt = Date.now();
+        diagnostics.serviceCalls += 1;
+        try {
+          service();
+        } finally {
+          diagnostics.serviceMs += Date.now() - startedAt;
+        }
       }
       if (performance.now() >= deadline) {
         throw error;
@@ -181,13 +208,16 @@ function logSlowTransactionHold(params: {
     async: false,
     ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
     elapsedMs: params.elapsedMs,
+    isMainThread,
     ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
     pid: process.pid,
+    threadId,
     thresholdMs: slowTransactionHoldThresholdMs(params.options),
   });
 }
 
 function logSlowTransactionStep(params: {
+  beginAdmission?: SqliteBeginAdmissionDiagnostics;
   elapsedMs: number;
   options?: SqliteTransactionOptions;
   step: SqliteTransactionStep;
@@ -202,10 +232,26 @@ function logSlowTransactionStep(params: {
       : {}),
     ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
     elapsedMs: params.elapsedMs,
+    isMainThread,
     ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
     pid: process.pid,
     step: params.step,
+    threadId,
+    ...beginAdmissionLogFields(params.beginAdmission),
   });
+}
+
+function beginAdmissionLogFields(diagnostics: SqliteBeginAdmissionDiagnostics | undefined) {
+  return diagnostics
+    ? {
+        beginAdmission: {
+          nativeAttempts: diagnostics.nativeAttempts,
+          nativeMs: diagnostics.nativeMs,
+          serviceCalls: diagnostics.serviceCalls,
+          serviceMs: diagnostics.serviceMs,
+        },
+      }
+    : {};
 }
 
 function execTimedTransactionStep(params: {
@@ -215,14 +261,19 @@ function execTimedTransactionStep(params: {
   step: SqliteTransactionStep;
 }): number {
   const startedAt = Date.now();
+  const beginAdmission =
+    params.sql === "BEGIN IMMEDIATE"
+      ? { nativeAttempts: 0, nativeMs: 0, serviceCalls: 0, serviceMs: 0 }
+      : undefined;
   try {
-    if (params.sql === "BEGIN IMMEDIATE") {
-      beginImmediateTransaction(params.db);
+    if (beginAdmission) {
+      beginImmediateTransaction(params.db, beginAdmission);
     } else {
       params.db.exec(params.sql);
     }
     const elapsedMs = Date.now() - startedAt;
     logSlowTransactionStep({
+      beginAdmission,
       elapsedMs,
       options: params.options,
       step: params.step,
@@ -242,11 +293,14 @@ function execTimedTransactionStep(params: {
         code: sqliteErrorCode(error),
         elapsedMs,
         failureKind: "lock-contention",
+        isMainThread,
         ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
         pid: process.pid,
         ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
         ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
         step: params.step,
+        threadId,
+        ...beginAdmissionLogFields(beginAdmission),
       });
     }
     throw error;
